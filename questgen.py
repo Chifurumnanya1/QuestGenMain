@@ -12,7 +12,7 @@ else:
     # Set the API key for OpenAI
     openai.api_key = openai_api_key
 
-# Set the page configuration
+# Set the page configuration (optional)
 st.set_page_config(
     page_title="MCQ Generator",
     page_icon="📚",
@@ -25,7 +25,7 @@ st.markdown(
     """
     <style>
     /* Apply a custom orange outline to the text input box */
-    .stTextInput, .stTextArea {
+    .css-1cpxqw2 {
         border: 2px solid #FFA500; /* Orange outline */
         border-radius: 5px;
         padding: 8px;
@@ -35,23 +35,25 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Function to generate MCQs using OpenAI with the new API
+# Function to generate MCQs using OpenAI with streaming
 def generate_mcqs_streaming(text, num_questions, model="gpt-3.5-turbo"):
     prompt = f"Generate {num_questions} multiple-choice questions (MCQs) based on the following text:\n{text}\nEach MCQ should have 5 options, and the correct answer should be the first option."
 
-    # Create a completion using the new API structure
-    response = openai.completions.create(
-        model=model,
+    # OpenAI ChatCompletion.create with stream=True to enable streaming response
+    response = openai.ChatCompletion.create(
+        model=model,  # Use gpt-3.5-turbo as the model
         messages=[{"role": "system", "content": "You are a helpful assistant."},
                   {"role": "user", "content": prompt}],
+        temperature=0.5,
         stream=True  # Enable streaming
     )
-
+    
     full_response = ""
     for chunk in response:
-        content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
-        full_response += content
-        yield content  # Yield each piece of the response as it is streamed
+        if "choices" in chunk:
+            content = chunk["choices"][0].get("delta", {}).get("content", "")
+            full_response += content
+            yield content  # Yield each piece of the response as it is streamed
     
     return full_response
 
@@ -79,17 +81,17 @@ def save_output_to_file(content, filename):
         file.write(content)
 
 # Streamlit app layout
-st.title("MCQ Generator with OpenAI")
+st.title("Cesiums MCQ Generator🚀")
 st.write("Enter the text below, and the app will generate MCQs based on that text.")
 
 # Input text area
 input_text = st.text_area("Input Text", height=200)
 
 # Input for number of questions
-num_questions = st.number_input("How many questions would you like to generate?", min_value=1, max_value=20, value=5)
+num_questions = st.number_input("How many questions would you like to generate?", min_value=1, max_value=20, value=10)
 
 # Text box for the filename with an orange outline
-filename = st.text_input("Enter a filename for the output (without extension)", value="generated_mcqs")
+filename = st.text_input("Enter a filename for the output (without extension)", value="")
 
 # Button to generate MCQs
 if st.button("Generate MCQs"):
