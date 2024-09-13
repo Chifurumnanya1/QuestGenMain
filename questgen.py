@@ -1,7 +1,18 @@
 import streamlit as st
 import openai
+import os
 
-# Set the page configuration (optional)
+# Fetch the API key from Streamlit secrets (set in Streamlit Cloud)
+openai_api_key = st.secrets["openai_api_key"]
+
+# Check if the API key is available
+if not openai_api_key:
+    st.error("API key is missing. Please set the OpenAI API key in Streamlit Secrets.")
+else:
+    # Set the API key for OpenAI
+    openai.api_key = openai_api_key
+
+# Set the page configuration
 st.set_page_config(
     page_title="MCQ Generator",
     page_icon="📚",
@@ -24,16 +35,13 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Set your OpenAI API key
-openai.api_key = ''
-
 # Function to generate MCQs using OpenAI with streaming
 def generate_mcqs_streaming(text, num_questions, model="gpt-3.5-turbo"):
     prompt = f"Generate {num_questions} multiple-choice questions (MCQs) based on the following text:\n{text}\nEach MCQ should have 5 options, and the correct answer should be the first option."
 
     # OpenAI ChatCompletion.create with stream=True to enable streaming response
     response = openai.ChatCompletion.create(
-        model=model,  # Use gpt-3.5-turbo as the model
+        model=model,
         messages=[{"role": "system", "content": "You are a helpful assistant."},
                   {"role": "user", "content": prompt}],
         temperature=0.5,
@@ -73,17 +81,17 @@ def save_output_to_file(content, filename):
         file.write(content)
 
 # Streamlit app layout
-st.title("Cesium MCQ Generator🚀")
+st.title("MCQ Generator with OpenAI")
 st.write("Enter the text below, and the app will generate MCQs based on that text.")
 
 # Input text area
 input_text = st.text_area("Input Text", height=200)
 
 # Input for number of questions
-num_questions = st.number_input("How many questions would you like to generate?", min_value=1, max_value=20, value=10)
+num_questions = st.number_input("How many questions would you like to generate?", min_value=1, max_value=20, value=5)
 
 # Text box for the filename with an orange outline
-filename = st.text_input("Enter a filename for the output (without extension)", value="")
+filename = st.text_input("Enter a filename for the output (without extension)", value="generated_mcqs")
 
 # Button to generate MCQs
 if st.button("Generate MCQs"):
