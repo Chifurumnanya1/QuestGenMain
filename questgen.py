@@ -48,13 +48,11 @@ def generate_mcqs_streaming(text, num_questions, model="gpt-3.5-turbo-instruct")
 
     full_response = ""
     for chunk in response:
-        # Extract the content from each streamed chunk
-        choices = chunk["choices"][0]  # Access the first choice from the chunk
-        delta = choices.get("delta", {})  # Get the delta from the choices
-        content = delta.get("content", "")  # Get the content
-
-        full_response += content
-        yield content  # Yield each piece of the response as it is streamed
+        for choice in chunk.choices:
+            if 'text' in choice:  # In case the streamed content uses 'text' field
+                content = choice.text
+                full_response += content
+                yield content  # Yield each piece of the response as it is streamed
 
     return full_response
 
