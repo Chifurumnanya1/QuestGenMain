@@ -40,25 +40,17 @@ def generate_mcqs_streaming(text, num_questions, model="gpt-3.5-turbo"):
     prompt = f"Generate {num_questions} multiple-choice questions (MCQs) based on the following text:\n{text}\nEach MCQ should have 5 options, and the correct answer should be the first option."
 
     # Create a completion using the new API structure
-    response = openai.ChatCompletion.create(
+    response = openai.Completion.create(
         model=model,
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": prompt}
-        ],
-        stream=True  # Enable streaming
+        prompt=prompt,
+        stream=True,  # Enable streaming
+        max_tokens=1000
     )
 
     full_response = ""
     for chunk in response:
-        if 'choices' in chunk:
-            choices = chunk['choices'][0]  # Access the first choice from the chunk
-            delta = choices.get("delta", {})  # Get the delta from the choices
-            content = delta.get("content", "")  # Get the content
-            
-            # Debugging: Print each chunk to see what is being received
-            print(f"Chunk received: {content}")
-            
+        if chunk.choices:
+            content = chunk.choices[0].text
             full_response += content
             yield content  # Yield each piece of the response as it is streamed
 
@@ -67,16 +59,17 @@ def generate_mcqs_streaming(text, num_questions, model="gpt-3.5-turbo"):
 # Function to format MCQs in the desired output format
 def format_mcqs(mcqs):
     formatted_mcqs = ""
-    questions = mcqs.split("\n\n")
+    questions = mcqs.strip().split("\n\n")
 
     for question in questions:
         lines = question.split("\n")
-        question_text = lines[0].strip().lstrip("0123456789. ")  # Remove numbering if present
-        formatted_mcqs += f"## {question_text}\n"
-        for option in lines[1:]:
-            option_text = option.strip()[2:].strip()  # Remove the first 2 characters (like "A. ") but not the first letter of the option
-            formatted_mcqs += f"** {option_text}\n"
-        formatted_mcqs += "\n"
+        if lines:
+            question_text = lines[0].strip().lstrip("0123456789. ")  # Remove numbering if present
+            formatted_mcqs += f"## {question_text}\n"
+            for option in lines[1:]:
+                option_text = option.strip()[2:].strip()  # Remove the first 2 characters (like "A. ") but not the first letter of the option
+                formatted_mcqs += f"** {option_text}\n"
+            formatted_mcqs += "\n"
 
     return formatted_mcqs
 
