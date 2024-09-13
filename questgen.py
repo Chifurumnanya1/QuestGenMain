@@ -36,21 +36,20 @@ st.markdown(
 )
 
 # Function to generate MCQs using OpenAI with streaming
-def generate_mcqs_streaming(text, num_questions, model="gpt-3.5-turbo"):
+def generate_mcqs_streaming(text, num_questions, model="gpt-3.5-turbo-instruct"):
     prompt = f"Generate {num_questions} multiple-choice questions (MCQs) based on the following text:\n{text}\nEach MCQ should have 5 options, and the correct answer should be the first option."
 
     # Create a completion using the new API structure
-    response = openai.ChatCompletion.create(
+    response = openai.completions.create(
         model=model,
-        messages=[{"role": "system", "content": "You are a helpful assistant."},
-                  {"role": "user", "content": prompt}],
+        prompt=prompt,
         stream=True  # Enable streaming
     )
 
     full_response = ""
     for chunk in response:
         # Extract the content from each streamed chunk
-        choices = chunk.choices[0]  # Access the first choice from the chunk
+        choices = chunk["choices"][0]  # Access the first choice from the chunk
         delta = choices.get("delta", {})  # Get the delta from the choices
         content = delta.get("content", "")  # Get the content
 
