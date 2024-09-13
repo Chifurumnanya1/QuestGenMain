@@ -1,3 +1,6 @@
+import streamlit as st
+import openai
+
 # Set the page configuration (optional)
 st.set_page_config(
     page_title="MCQ Generator",
