@@ -88,10 +88,10 @@ st.write("Enter the text below, and the app will generate MCQs based on that tex
 input_text = st.text_area("Input Text", height=200)
 
 # Input for number of questions
-num_questions = st.number_input("How many questions would you like to generate?", min_value=1, max_value=20, value=5)
+num_questions = st.number_input("How many questions would you like to generate?", min_value=1, max_value=20, value=10)
 
 # Text box for the filename with an orange outline
-filename = st.text_input("Enter a filename for the output (without extension)", value="generated_mcqs")
+filename = st.text_input("Enter a filename for the output (without extension)", value="")
 
 # Button to generate MCQs
 if st.button("Generate MCQs"):
