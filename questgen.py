@@ -2,14 +2,21 @@
 import streamlit as st
 import openai, json, datetime as dt
 import re
-
+import os
 # ─────────────────────────────────────────────────────────
 # 1.  API key
 # ─────────────────────────────────────────────────────────
-openai.api_key = st.secrets["openai_api_key"]
-if not openai.api_key:
-    st.error("API key missing in Streamlit Secrets")
+# Try lowercase first (matches your secrets), then env‑var fallback
+openai_api_key = st.secrets.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+
+if not openai_api_key:
+    st.error(
+        "OpenAI key not found.\n"
+        "Add `openai_api_key` to Streamlit Secrets or set the OPENAI_API_KEY env var."
+    )
     st.stop()
+
+openai.api_key = openai_api_key
 
 # ─────────────────────────────────────────────────────────
 # 2.  Page config + style
