@@ -1,128 +1,82 @@
 import streamlit as st
-import openai
-import os
+import openai, json, datetime as dt, re
 
-# Fetch the API key from Streamlit secrets (set in Streamlit Cloud)
-openai_api_key = st.secrets["openai_api_key"]
+openai.api_key = st.secrets["openai_api_key"]
+if not openai.api_key:
+    st.error("API key missing in Streamlit Secrets")
+    st.stop()
 
-# Check if the API key is available
-if not openai_api_key:
-    st.error("API key is missing. Please set the OpenAI API key in Streamlit Secrets.")
-else:
-    # Set the API key for OpenAI
-    openai.api_key = openai_api_key
-
-# Set the page configuration
-st.set_page_config(
-    page_title="MCQ Generator",
-    page_icon="📚",
-    layout="centered",
-    initial_sidebar_state="auto",
-)
-
-# Inject custom CSS to style the text input box with an orange outline
+st.set_page_config("MCQ Generator", "📚", layout="centered")
 st.markdown(
-    """
-    <style>
-    /* Apply a custom orange outline to the text input box */
-    .css-1cpxqw2 {
-        border: 2px solid #FFA500; /* Orange outline */
-        border-radius: 5px;
-        padding: 8px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
+    """<style>.css-1cpxqw2{border:2px solid #FFA500;border-radius:5px;padding:8px}</style>""",
+    unsafe_allow_html=True,
 )
 
-# Function to generate MCQs using OpenAI with streaming
-def generate_mcqs_streaming(text, num_questions, model="gpt-3.5-turbo"):
-    prompt = f"Generate {num_questions} multiple-choice questions (MCQs) based on the following text:\n{text}\nEach MCQ should have 5 options, and the correct answer should be the first option."
-
-    # OpenAI ChatCompletion.create with stream=True to enable streaming response
+# 🔹 Extract a topic title from the passage
+def extract_topic(text):
+    prompt = "Summarize the main topic of the text below in 3–5 words (no full sentence):\n\n" + text
     response = openai.ChatCompletion.create(
-        model=model,
-        messages=[{"role": "system", "content": "You are a helpful assistant."},
-                  {"role": "user", "content": prompt}],
-        temperature=0.5,
-        stream=True  # Enable streaming
+        model="gpt-4o-mini",
+        messages=[{"role":"user", "content": prompt}],
+        temperature=0.2,
     )
-    
-    full_response = ""
-    for chunk in response:
-        if "choices" in chunk:
-            content = chunk["choices"][0].get("delta", {}).get("content", "")
-            full_response += content
-            yield content  # Yield each piece of the response as it is streamed
-    
-    return full_response
+    topic = response.choices[0].message.content.strip()
+    # Convert to a safe filename slug
+    slug = re.sub(r"[^\w\s-]", "", topic)          # remove punctuation
+    slug = re.sub(r"\s+", "_", slug).lower()       # spaces to underscores
+    return slug or "untitled_topic"
 
-# Function to format MCQs in the desired output format
-def format_mcqs(mcqs):
-    formatted_mcqs = ""
-    questions = mcqs.split("\n\n")
-    
-    for question in questions:
-        lines = question.split("\n")
-        question_text = lines[0].strip().lstrip("0123456789. ")  # Remove numbering if present
-        formatted_mcqs += f"## {question_text}\n"
-        for option in lines[1:]:
-            option_text = option.strip()[2:].strip()  # Remove the first 2 characters (like "A. ") but not the first letter of the option
-            formatted_mcqs += f"** {option_text}\n"
-        formatted_mcqs += "\n"
-    
-    return formatted_mcqs
+# 🔹 Generate the actual MCQs as JSON
+def make_json(text, n):
+    sys = (
+        "Return ONLY valid JSON — an array of objects with keys: "
+        "question_text, option_a to option_e, correct_answer, explanation_text, "
+        "difficulty (easy|medium|hard), created_at (leave empty string)."
+    )
+    user = f"Generate {n} five-option MCQs from the text:\n\n{text}"
+    out = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[{"role":"system", "content": sys}, {"role":"user", "content": user}],
+        temperature=0.3,
+    ).choices[0].message.content.strip()
+    return out
 
-# Function to save MCQs to a text file with a dynamic filename
-def save_output_to_file(content, filename):
-    if not filename.endswith('.txt'):
-        filename += '.txt'  # Ensure the file has a .txt extension
-    with open(filename, "w") as file:
-        file.write(content)
-
-# Streamlit app layout
+# 🔹 Streamlit UI
 st.title("Cesium MCQ Generator 🚀")
-st.write("Enter the text below, and the app will generate MCQs based on that text.")
 
-# Input text area
-input_text = st.text_area("Input Text", height=200)
+source = st.text_area("Input Text", height=200)
+count  = st.number_input("Number of questions", 1, 50, 10)
 
-# Input for number of questions
-num_questions = st.number_input("How many questions would you like to generate?", min_value=1, max_value=20, value=10)
+if st.button("Generate JSON"):
+    if not source.strip():
+        st.warning("Please enter some source text.")
+        st.stop()
 
-# Text box for the filename with an orange outline
-filename = st.text_input("Enter a filename for the output (without extension)", value="")
+    st.info("Extracting topic and generating MCQs… ⏳")
 
-# Button to generate MCQs
-if st.button("Generate MCQs"):
-    # Validate that the filename is not empty
-    if not filename.strip():
-        st.error("The filename is required. Please enter a valid filename.")
-    elif input_text:
-        # Display progress message
-        st.info(f"Generating MCQs, please wait... (File will be saved as {filename}.txt)")
-        
-        # Placeholder to dynamically update the output as it streams in
-        output_placeholder = st.empty()
+    # ➤ Get topic
+    topic_slug = extract_topic(source)
 
-        # Stream the response from OpenAI and update the output in real-time
-        full_response = ""
-        for chunk in generate_mcqs_streaming(input_text, num_questions):
-            full_response += chunk
-            output_placeholder.text(full_response)
-        
-        # Format MCQs in the desired output format
-        formatted_mcqs = format_mcqs(full_response)
-        
-        # Display formatted MCQs
-        st.subheader("Generated MCQs")
-        st.text(formatted_mcqs)
-        
-        # Save the formatted MCQs to a text file
-        save_output_to_file(formatted_mcqs, filename)
-        
-        # Provide a download link for the text file
-        with open(f"{filename}.txt", "r") as file:
-            st.download_button(f"Download MCQs (Saved as {filename}.txt)", file, f"{filename}.txt")
-    else:
-        st.warning("Please input text to generate MCQs.")
+    # ➤ Generate questions
+    raw = make_json(source, count)
+
+    # ➤ Parse + validate
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        st.error(f"OpenAI returned invalid JSON:\n{e}\n\nRaw output:\n{raw}")
+        st.stop()
+
+    # ➤ Generate filename: mcqs_topic_slug_YYYYMMDD_HHMMSS.json
+    timestamp = dt.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"mcqs_{topic_slug}_{timestamp}.json"
+
+    # ➤ Save file
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    st.success(f"Done! File saved as **{filename}**")
+    st.json(data, expanded=False)
+
+    with open(filename, "rb") as f:
+        st.download_button(f"Download {filename}", f, filename, "application/json")
