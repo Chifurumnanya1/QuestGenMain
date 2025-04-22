@@ -1,17 +1,17 @@
 # app.py
 import streamlit as st
 import openai, json, datetime as dt
-from slugify import slugify
+import re
 
 # ─────────────────────────────────────────────────────────
-# 1.  API key (add OPENAI_API_KEY in Streamlit Cloud Secrets)
+# 1.  API key
 # ─────────────────────────────────────────────────────────
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 if not openai.api_key:
     st.error("OPENAI_API_KEY missing in Secrets"); st.stop()
 
 # ─────────────────────────────────────────────────────────
-# 2.  Page config + tiny style tweak
+# 2.  Page config + style
 # ─────────────────────────────────────────────────────────
 st.set_page_config("Text ➜ MCQ JSON Generator", "📚", layout="centered")
 st.markdown(
@@ -58,17 +58,18 @@ st.title("Text ➜ MCQ JSON Generator 🚀")
 
 source_text = st.text_area("Paste textbook content", height=220)
 num_qs      = st.number_input("How many MCQs?", 1, 50, 10)
-topic_input = st.text_input("Topic slug (optional)", placeholder="e.g. brachial_plexus")
+topic_field = st.text_input("File topic (used as filename prefix)")
 
 if st.button("Generate JSON"):
-    # Basic checks
     if not source_text.strip():
-        st.warning("Please paste some source text first."); st.stop()
+        st.warning("Please paste some source text."); st.stop()
+    if not topic_field.strip():
+        st.warning("Please enter a topic for the filename."); st.stop()
 
     # ---------------- OpenAI call ----------------
-    st.info("Calling OpenAI … please wait ⏳")
+    st.info("Generating MCQs … please wait ⏳")
     response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",           # swap to gpt‑4o if you have access
+        model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user",   "content": build_user_prompt(source_text, num_qs)},
@@ -82,25 +83,20 @@ if st.button("Generate JSON"):
 
     try:
         data = json.loads(response)
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError:
         st.error("Could not parse JSON from OpenAI:\n\n" + response); st.stop()
 
-    # Ensure correct_answer is the actual answer string
+    # replace placeholders like "option_b" with the actual answer string
     for q in data:
         key = q.get("correct_answer", "")
         if key in ["option_a", "option_b", "option_c", "option_d", "option_e"]:
             q["correct_answer"] = q.get(key, "")
 
     # ---------------- Build filename ----------------
-    slug = topic_input.strip()
-    if not slug:
-        # fallback: derive from first 3 words of first question
-        slug = slugify(" ".join(data[0]["question_text"].split()[:3])) or "mcqs"
-    else:
-        slug = slugify(slug)
-
-    timestamp = dt.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    filename  = f"{slug}_{timestamp}.json"
+    # Keep only filesystem‑safe characters from topic input
+    safe_topic = re.sub(r"[^\w\-. ]", "_", topic_field.strip())
+    timestamp  = dt.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename   = f"{safe_topic}_{timestamp}.json"
 
     # ---------------- Write file & serve ----------------
     with open(filename, "w", encoding="utf-8") as f:
