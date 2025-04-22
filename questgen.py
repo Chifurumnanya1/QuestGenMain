@@ -6,9 +6,10 @@ import re
 # ─────────────────────────────────────────────────────────
 # 1.  API key
 # ─────────────────────────────────────────────────────────
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+openai.api_key = st.secrets["openai_api_key"]
 if not openai.api_key:
-    st.error("OPENAI_API_KEY missing in Secrets"); st.stop()
+    st.error("API key missing in Streamlit Secrets")
+    st.stop()
 
 # ─────────────────────────────────────────────────────────
 # 2.  Page config + style
