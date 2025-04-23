@@ -22,7 +22,7 @@ from llama_index.core import (
     ServiceContext,
 )
 from llama_index.embeddings.openai import OpenAIEmbedding        # ← fixed
-from llama_index.core.llms import OpenAI as LlamaOpenAI
+from llama_index.llms.openai import OpenAI as LlamaOpenAI
 from llama_index.vector_stores.faiss import FaissVectorStore
 
 # ─── 3.  Streamlit page config ─────────────────────────────────
