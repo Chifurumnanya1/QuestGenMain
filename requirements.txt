@@ -1,2 +1,9 @@
 streamlit
-openai==0.28.0
+openai
+llama-index==0.10.9
+llama-index[doc_support]
+pdfplumber
+python-docx
+unstructured
+pillow
+requests
