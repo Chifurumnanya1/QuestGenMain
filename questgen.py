@@ -17,7 +17,7 @@ os.environ["OPENAI_API_KEY"] = openai_api_key
 # ─── 2.  LlamaIndex + FAISS imports ────────────────────────────
 import faiss
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, ServiceContext
-from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.embeddings.openai import OpenAIEmbedding     # provides get_text_embedding()  :contentReference[oaicite:0]{index=0}
 from llama_index.llms.openai import OpenAI as LlamaOpenAI
 from llama_index.vector_stores.faiss import FaissVectorStore
 
@@ -36,20 +36,19 @@ if "idx" not in st.session_state: st.session_state.idx = None
 # ─── 5.  Build FAISS index ─────────────────────────────────────
 def build_index(file_path: Path):
     docs = SimpleDirectoryReader(input_files=[str(file_path)]).load_data()
-
-    # Embedding + LLM context
     embed_model = OpenAIEmbedding(model="text-embedding-3-small")
     svc = ServiceContext.from_defaults(
         llm=LlamaOpenAI(model="gpt-3.5-turbo", temperature=0),
         embed_model=embed_model,
     )
 
-    # Create empty FAISS index with correct dimension
-    dim = embed_model.embed_query("probe").shape[0]      # e.g. 1536
-    faiss_index = faiss.IndexFlatL2(dim)                 # exact L2
+    # ── FIX: probe dimension via get_text_embedding() ──────────
+    probe_vec  = embed_model.get_text_embedding("probe")  # method documented in LlamaIndex docs  :contentReference[oaicite:1]{index=1}
+    dim        = len(probe_vec)
+    faiss_index = faiss.IndexFlatL2(dim)                  # exact L2 search
 
-    # Wrap index, add documents
-    faiss_store = FaissVectorStore(faiss_index=faiss_index, embed_model=embed_model)
+    faiss_store = FaissVectorStore(faiss_index=faiss_index,
+                                   embed_model=embed_model)
     faiss_store.add(documents=docs)
 
     return VectorStoreIndex(vector_store=faiss_store, service_context=svc)
@@ -61,7 +60,7 @@ if uploaded:
         st.session_state.idx = build_index(tmp_file)
         st.success("✅ FAISS vector index built!")
 
-# ─── 6.  MCQ generation helpers ────────────────────────────────
+# ─── 6.  MCQ generation helpers (unchanged) ────────────────────
 SCHEMA = """
 { "question_text": "string", "option_a": "string", "option_b": "string",
   "option_c": "string", "option_d": "string", "option_e": "string",
@@ -78,7 +77,7 @@ def build_prompt(txt:str,n:int)->str:
             "The correct_answer must equal one of option_a-e verbatim.\n\n\"\"\"" + txt + "\"\"\"")
 def mcqs_from_text(txt:str,n:int):
     res = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",           # switch back to gpt-4o if you like
+        model="gpt-3.5-turbo",
         messages=[{"role":"system","content":SYSTEM_PROMPT},
                   {"role":"user","content":build_prompt(txt,n)}],
         temperature=0.3,
@@ -91,7 +90,7 @@ def mcqs_from_text(txt:str,n:int):
         q["created_at"] = dt.datetime.utcnow().isoformat()
     return data
 
-# ─── 7.  Retrieve ↦ MCQs ↦ Supabase ────────────────────────────
+# ─── 7.  Retrieve ↦ MCQs ↦ Supabase (unchanged) ───────────────
 if st.button("🔍 Retrieve & Generate"):
     if not st.session_state.idx: st.warning("Upload a textbook first."); st.stop()
     if not topic.strip():         st.warning("Enter a topic."); st.stop()
