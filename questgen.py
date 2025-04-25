@@ -1,96 +1,80 @@
 # ───────────────────────────────────────────────────────────────
 # app.py  –  Textbook ➜ FAISS-RAG ➜ MCQ JSON ➜ Supabase RPC
+# (OpenAI Python SDK ≥ 1.15)
 # ───────────────────────────────────────────────────────────────
-import streamlit as st, openai, json, datetime as dt, re, os, tempfile, uuid, requests
+import streamlit as st, json, datetime as dt, re, os, tempfile, uuid, requests
 from pathlib import Path
-
-# ─── 1.  API/Secrets ───────────────────────────────────────────
-openai_api_key = st.secrets.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
-supabase_url   = st.secrets.get("supabase_url")   or os.getenv("SUPABASE_URL")
-supabase_key   = st.secrets.get("supabase_key")   or os.getenv("SUPABASE_KEY")
-rpc_name       = "upload_questions"                     # ← update
-
-if not all([openai_api_key, supabase_url, supabase_key]):
-    st.error("OpenAI or Supabase keys missing."); st.stop()
-
-openai.api_key = openai_api_key
-os.environ["OPENAI_API_KEY"] = openai_api_key                # for LlamaIndex
-
-# ─── 2.  LlamaIndex + FAISS imports ───────────────────────────
 import faiss
+from openai import OpenAI                                   # NEW SDK v1 client
+
+# ─── 1.  Secrets / keys ───────────────────────────────────────
+openai_api_key = st.secrets["openai_api_key"]
+supabase_url   = st.secrets["supabase_url"]
+supabase_key   = st.secrets["supabase_key"]
+rpc_name       = "your_rpc_function_name"                    # ← change
+
+client = OpenAI(api_key=openai_api_key)                      # NEW
+
+# ─── 2.  Llama-Index + FAISS imports ─────────────────────────
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, ServiceContext
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai import OpenAI as LlamaOpenAI
 from llama_index.vector_stores.faiss import FaissVectorStore
 
-# ─── 3.  Streamlit page setup ─────────────────────────────────
+# ─── 3.  Streamlit UI ────────────────────────────────────────
 st.set_page_config("Textbook ➜ MCQ Generator", "📚", layout="centered")
 st.title("Textbook ➜ MCQ JSON Generator 🚀")
 
-uploaded = st.file_uploader("Upload PDF / DOCX / TXT", ["pdf", "docx", "txt"])
-subject  = st.text_input("Subject name")
-chapter  = st.text_input("Chapter name")
-topic    = st.text_input("Topic / keyword")
-num_qs   = st.number_input("How many MCQs?", 1, 50, 10)
+upl  = st.file_uploader("Upload PDF / DOCX / TXT", ["pdf", "docx", "txt"])
+subj = st.text_input("Subject name")
+chap = st.text_input("Chapter name")
+topic= st.text_input("Topic / keyword")
+num  = st.number_input("How many MCQs?", 1, 50, 10)
+if "idx" not in st.session_state: st.session_state.idx = None
 
-if "idx" not in st.session_state:
-    st.session_state.idx = None
-
-# ─── 4.  Build FAISS-backed index ─────────────────────────────
-def build_index(file_path: Path):
-    docs = SimpleDirectoryReader(input_files=[str(file_path)]).load_data()
-
+# ─── 4.  Build FAISS index helper ────────────────────────────
+def build_index(path: Path):
+    docs  = SimpleDirectoryReader(input_files=[str(path)]).load_data()
     embed = OpenAIEmbedding(model="text-embedding-3-small")
     svc   = ServiceContext.from_defaults(
         llm=LlamaOpenAI(model="gpt-3.5-turbo", temperature=0),
         embed_model=embed,
     )
+    dim   = len(embed.get_text_embedding("probe"))
+    fidx  = faiss.IndexFlatL2(dim)
+    store = FaissVectorStore(fidx)
+    return VectorStoreIndex.from_documents(docs, service_context=svc,
+                                           vector_store=store)
 
-    dim         = len(embed.get_text_embedding("probe"))      # vector size
-    faiss_index = faiss.IndexFlatL2(dim)
-    faiss_store = FaissVectorStore(faiss_index)
-
-    # 👉 from_documents() embeds & inserts nodes into FAISS for you
-    return VectorStoreIndex.from_documents(
-        docs,
-        service_context = svc,
-        vector_store    = faiss_store,
-    )
-
-if uploaded:
+if upl:
     with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp) / f"{uuid.uuid4()}{Path(uploaded.name).suffix}"
-        with open(tmp_path, "wb") as f:
-            f.write(uploaded.getbuffer())
-        st.session_state.idx = build_index(tmp_path)
+        tmpf = Path(tmp)/f"{uuid.uuid4()}{Path(upl.name).suffix}"
+        with open(tmpf,"wb") as f: f.write(upl.getbuffer())
+        st.session_state.idx = build_index(tmpf)
         st.success("✅ FAISS index built!")
 
-# ─── 5.  MCQ generator helpers ────────────────────────────────
-SCHEMA = """
-{ "question_text": "string", "option_a": "string", "option_b": "string",
-  "option_c": "string", "option_d": "string", "option_e": "string",
-  "correct_answer": "string", "explanation_text": "string",
-  "difficulty": "easy|medium|hard", "created_at": "" }
-""".strip()
+# ─── 5.  MCQ generation (uses new client) ────────────────────
+SCHEMA = """{ "question_text": "string","option_a":"string","option_b":"string",
+"option_c":"string","option_d":"string","option_e":"string","correct_answer":"string",
+"explanation_text":"string","difficulty":"easy|medium|hard","created_at":"" }""".strip()
 
-SYSTEM_PROMPT = (
-    "You are an MCQ generator.\nReturn ONLY valid JSON (array of objects). "
-    "Each object must match this schema exactly:\n" + SCHEMA +
-    "\nDo NOT wrap the JSON in markdown."
-)
+SYSTEM = ("You are an MCQ generator.\nReturn ONLY valid JSON (array of objects) "
+          "conforming exactly to this schema:\n" + SCHEMA)
 
-def prompt(text:str, n:int)->str:
-    return (f"Generate {n} five-option MCQs from the passage below. "
-            "correct_answer must equal one of option_a-e verbatim.\n\n\"\"\"" + text + "\"\"\"")
+def prompt(txt,n): return (f"Generate {n} five-option MCQs from the passage below. "
+                           "correct_answer must equal one of option_a-e verbatim.\n\n\"\"\""
+                           + txt + "\"\"\"")
 
-def make_mcqs(text:str, n:int):
-    resp = openai.ChatCompletion.create(
+def make_mcqs(txt,n):
+    comp = client.chat.completions.create(                  # NEW CALL
         model="gpt-3.5-turbo",
-        messages=[{"role":"system","content":SYSTEM_PROMPT},
-                  {"role":"user",  "content":prompt(text,n)}],
+        messages=[
+            {"role":"system","content":SYSTEM},
+            {"role":"user",  "content":prompt(txt,n)},
+        ],
         temperature=0.3,
-    ).choices[0].message.content.strip()
-
+    )
+    resp = comp.choices[0].message.content.strip()          # NEW ACCESS
     data = json.loads(resp)
     for q in data:
         key = q.get("correct_answer","")
@@ -101,22 +85,17 @@ def make_mcqs(text:str, n:int):
 
 # ─── 6.  Retrieve ➜ MCQs ➜ Supabase ──────────────────────────
 if st.button("🔍 Retrieve & Generate"):
-    if not st.session_state.idx:
-        st.warning("Upload a textbook first."); st.stop()
-    if not topic.strip():
-        st.warning("Enter a topic."); st.stop()
-    if not (subject and chapter):
-        st.warning("Fill in subject & chapter."); st.stop()
+    if not st.session_state.idx: st.warning("Upload textbook first."); st.stop()
+    if not topic.strip():        st.warning("Enter a topic."); st.stop()
+    if not (subj and chap):      st.warning("Fill subject & chapter."); st.stop()
 
-    with st.spinner("Searching textbook …"):
+    with st.spinner("Searching …"):
         passage = st.session_state.idx.as_query_engine(similarity_top_k=5)\
-                                      .query(topic).response
-
+                                     .query(topic).response
     with st.spinner("Generating MCQs …"):
-        mcqs = make_mcqs(passage, int(num_qs))
+        mcqs = make_mcqs(passage, int(num))
 
-    st.success(f"Generated {len(mcqs)} MCQs")
-    st.json(mcqs, expanded=False)
+    st.success(f"Generated {len(mcqs)} MCQs"); st.json(mcqs, expanded=False)
 
     fname = f"{re.sub(r'[^\w\\-. ]','_',topic)}_{dt.datetime.utcnow():%Y%m%d_%H%M%S}.json"
     with open(fname,"w",encoding="utf-8") as f: json.dump(mcqs,f,indent=2)
@@ -124,23 +103,22 @@ if st.button("🔍 Retrieve & Generate"):
 
     if st.button("📤 Send to Supabase"):
         payload = {
-            "_subject_name": subject,
-            "_chapter_name": chapter,
+            "_subject_name": subj,
+            "_chapter_name": chap,
             "_topic_name":   topic.strip(),
             "_questions":    json.dumps(mcqs)
         }
-        hdr = {
-            "apikey":        supabase_key,
-            "Authorization": f"Bearer {supabase_key}",
-            "Content-Type":  "application/json",
+        hdrs = {
+            "apikey":supabase_key,
+            "Authorization":f"Bearer {supabase_key}",
+            "Content-Type":"application/json"
         }
         url = f"{supabase_url}/rest/v1/rpc/{rpc_name}"
         with st.spinner("Uploading …"):
             try:
-                r = requests.post(url, json=payload, headers=hdr, timeout=30)
+                r = requests.post(url,json=payload,headers=hdrs,timeout=30)
                 r.raise_for_status()
                 st.success("🎉 Uploaded to Supabase!")
                 if r.content: st.json(r.json())
             except requests.RequestException as e:
                 st.error(f"RPC failed:\n{e}")
-                st.text(r.text if 'r' in locals() else "")
