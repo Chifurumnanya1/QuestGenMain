@@ -11,3 +11,5 @@ pillow
 requests
 python-docx          # already parsing DOCX via python-docx
 docx2txt             # ← add this line
+
+
