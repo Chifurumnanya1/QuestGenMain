@@ -11,7 +11,7 @@ from openai import OpenAI                                   # NEW SDK v1 client
 openai_api_key = st.secrets["openai_api_key"]
 supabase_url   = st.secrets["supabase_url"]
 supabase_key   = st.secrets["supabase_key"]
-rpc_name       = "your_rpc_function_name"                    # ← change
+rpc_name       = "upload_questions"                    # ← change
 
 client = OpenAI(api_key=openai_api_key)                      # NEW
 
