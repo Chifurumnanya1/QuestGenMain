@@ -18,10 +18,11 @@ os.environ["OPENAI_API_KEY"] = openai_api_key
 # ─── 2.  Llama-Index + FAISS imports ───────────────────────────
 import faiss
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, ServiceContext
-from llama_index.storage.storage_context import StorageContext
+from llama_index.storage import StorageContext          # ← fixed path
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai import OpenAI as LlamaOpenAI
 from llama_index.vector_stores.faiss import FaissVectorStore
+
 
 # ─── 3.  Streamlit page config ─────────────────────────────────
 st.set_page_config("Textbook ➜ MCQ Generator", "📚", layout="centered")
