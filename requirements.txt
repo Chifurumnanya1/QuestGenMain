@@ -1,5 +1,5 @@
 streamlit
-openai
+openai==0.28.1
 llama-index==0.10.9          # still exports VectorStoreIndex at top level
 llama-index[doc_support]
 llama-index-vector-stores-faiss
