@@ -1,9 +1,10 @@
 import streamlit as st
 import openai
+from openai import OpenAI
 from datetime import datetime
 
-# Set your OpenAI API key
-openai.api_key = st.secrets["OPENAI_API_KEY"]  # Use streamlit secrets for better security
+# Initialize OpenAI client
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # System Prompt
 SYSTEM_PROMPT = """
@@ -21,16 +22,16 @@ After each question, show "**Correct Answer: X. (Option text)**" exactly.
 """
 
 def call_openai(user_prompt):
-    response = openai.ChatCompletion.create(
-        model="gpt-4o",  # Use gpt-4-turbo or gpt-4o for cheaper and faster responses
+    response = client.chat.completions.create(
+        model="gpt-4o",  # You can also use "gpt-4-turbo" or "gpt-3.5-turbo"
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt}
         ],
-        temperature=0.1,  # Keep it very low for accuracy
+        temperature=0.1,
         max_tokens=4000
     )
-    return response['choices'][0]['message']['content']
+    return response.choices[0].message.content
 
 # Streamlit App
 st.set_page_config(page_title="MCQ Cleaner AI", page_icon="🧠", layout="wide")
