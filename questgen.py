@@ -13,23 +13,23 @@ st.set_page_config(
 
 def build_prompt(questions: str, answers: str) -> str:
     return f"""
-You are an expert assistant that transforms multiple-choice questions into a CSV file.
+You are an expert assistant that transforms every provided multiple-choice question into a CSV file—do not output only a sample.
 
 Input:
-- Questions with options A-D in a text block.
+- All questions with options A-D in a text block.
 - Answers listing question numbers and letters (e.g., 1.A 2.C ...).
 
 Tasks:
-1. Parse questions and options.
-2. Map answer letters to full option text.
+1. Parse all questions and their options (do not omit any).
+2. Map each correct answer letter to its full option text.
 3. Generate a plausible wrong option E for each question.
-4. Write a concise explanation for the correct answer.
+4. Write a concise explanation for why the chosen answer is correct.
 5. Assign difficulty="easy" if factual, else "medium".
 6. Use topic_id=3 and created_at="2025-04-26 00:00:00".
-7. Output CSV text with header:
+7. Output ONLY the raw CSV content with header, without any preamble or postamble:
    id,topic_id,question_text,difficulty,correct_answer,option_a,option_b,option_c,option_d,option_e,explanation_text,created_at
 
-Quote fields containing commas.
+Ensure all fields are comma-separated and quote fields containing commas.
 
 ---
 {questions}\n\n{answers}
@@ -93,7 +93,6 @@ if st.button("Generate CSV"):
                     file_name="mcq_questions.csv",
                     mime="text/csv"
                 )
-                st.text_area("CSV Preview", csv_output, height=300)
             except Exception as e:
                 st.error(f"❌ {e}")
 
