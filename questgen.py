@@ -1,35 +1,34 @@
 import streamlit as st
 from openai import OpenAI
-from datetime import datetime
-from io import StringIO
 import pandas as pd
+from datetime import datetime
+from io import StringIO, BytesIO
 
 # Initialize OpenAI client
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# Updated SYSTEM PROMPT
+# SYSTEM PROMPT (strict CSV rules)
 SYSTEM_PROMPT = """
 You are an expert MCQ formatter and CSV generator.
 You will receive messy MCQs and answer keys.
 
 For each MCQ:
 - Correct grammar and structure.
-- Create four options A, B, C, D.
-- Invent an extra wrong option E (different from the correct answer).
-- Match the correct answer using the **full exact option text**.
-- Generate a short 1-2 line explanation why the correct option is correct.
+- Create four options: A, B, C, D.
+- Invent an extra wrong option E.
+- Match correct_answer by full exact option text.
+- Generate a short 1-2 line explanation_text.
 - Set difficulty as "easy".
-- Leave created_at as blank.
+- Leave created_at blank.
 
-Output ONLY clean CSV text with this exact heading:
+Format ONLY clean CSV with this header:
 
 id,question_text,difficulty,correct_answer,option_a,option_b,option_c,option_d,option_e,explanation_text,created_at
 
-Important Rules:
-- Surround EVERY text field (question, options, explanation) with double quotes ("...") to protect commas.
-- Escape any inner double quotes properly.
-- Start id from 1, 2, 3, upward.
-- No JSON, no markdown, no explanation around the CSV. Only raw CSV data.
+STRICT RULES:
+- Enclose every text field inside double quotes ("...") if necessary.
+- Escape any internal quotes properly.
+- Ensure clean CSV format, no markdown, no JSON, no extra text.
 """
 
 def call_openai(user_prompt):
@@ -44,11 +43,14 @@ def call_openai(user_prompt):
     )
     return response.choices[0].message.content
 
-# Streamlit App
-st.set_page_config(page_title="MCQ to CSV Generator", page_icon="🧠", layout="wide")
+def split_into_batches(text_list, batch_size=30):
+    for i in range(0, len(text_list), batch_size):
+        yield text_list[i:i+batch_size]
 
-st.title("🧠 MCQ Cleaner and CSV Generator")
-st.write("Paste messy MCQs and answers, and get a clean downloadable CSV!")
+# Streamlit App
+st.set_page_config(page_title="MCQ Excel Generator", page_icon="📄", layout="wide")
+st.title("📄 MCQ Cleaner and Excel Generator (with Batching & Download)")
+st.write("Paste your messy MCQs and answers. AI will clean, explain, and give you an Excel file!")
 
 st.subheader("📝 Paste Your Raw MCQs Below")
 raw_mcqs = st.text_area("Raw MCQs", height=300, placeholder="Paste your questions and options here...")
@@ -56,29 +58,48 @@ raw_mcqs = st.text_area("Raw MCQs", height=300, placeholder="Paste your question
 st.subheader("🔑 Paste Your Answer Keys Below")
 answer_keys = st.text_area("Answer Keys", height=100, placeholder="Example: 1.B 2.A 3.C")
 
-if st.button("🚀 Generate CSV"):
+if st.button("🚀 Generate Excel File"):
     if not raw_mcqs.strip() or not answer_keys.strip():
         st.error("⚠️ Please paste both MCQs and Answer Keys.")
     else:
-        user_prompt = f"Here are the MCQs:\n{raw_mcqs}\n\nHere are the correct answers:\n{answer_keys}"
-        with st.spinner("🧠 Processing with OpenAI..."):
-            csv_output = call_openai(user_prompt)
+        mcq_lines = raw_mcqs.strip().split("\n")
+        batches = list(split_into_batches(mcq_lines, batch_size=30))
+        
+        all_batches = []
+        current_id = 1
+        
+        for batch_num, batch in enumerate(batches):
+            batch_text = "\n".join(batch)
+            user_prompt = f"Here are some MCQs:\n{batch_text}\n\nHere are the correct answers:\n{answer_keys}"
+            with st.spinner(f"Processing batch {batch_num + 1} of {len(batches)}..."):
+                batch_csv = call_openai(user_prompt)
 
-        try:
-            # Try reading the CSV output safely
-            csv_buffer = StringIO(csv_output)
-            df = pd.read_csv(csv_buffer)
-            
-            st.success("✅ MCQs cleaned and formatted!")
-            st.download_button(
-                label="📥 Download Cleaned MCQs as CSV",
-                data=csv_output,
-                file_name=f"mcqs_cleaned_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
-            )
-            
-            st.dataframe(df)  # Show preview table inside Streamlit
+            # Parse batch CSV safely
+            batch_csv_io = StringIO(batch_csv)
+            df_batch = pd.read_csv(batch_csv_io, quoting=1)
 
-        except Exception as e:
-            st.error(f"⚠️ Error reading the generated CSV: {e}")
-            st.code(csv_output)
+            df_batch['id'] = range(current_id, current_id + len(df_batch))
+            current_id += len(df_batch)
+
+            all_batches.append(df_batch)
+
+        # Combine all batches into a single DataFrame
+        final_df = pd.concat(all_batches, ignore_index=True)
+
+        # Generate Excel file in memory
+        excel_buffer = BytesIO()
+        final_df.to_excel(excel_buffer, index=False, sheet_name="MCQs")
+        excel_buffer.seek(0)
+
+        st.success("✅ MCQs cleaned and formatted successfully!")
+
+        # Download button
+        st.download_button(
+            label="📥 Download MCQs as Excel File (.xlsx)",
+            data=excel_buffer,
+            file_name=f"mcqs_cleaned_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        st.subheader("🔎 Preview of Cleaned MCQs:")
+        st.dataframe(final_df)
