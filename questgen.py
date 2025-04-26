@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 import openai, streamlit as st
 
 # ─────────── Config ───────────
-openai.api_key = st.secrets["open_api_key"]
+openai.api_key = st.secrets["openai_api_key"]
 MODEL = "gpt-4o"
 QUESTIONS_PER_BATCH = 8          # tweak if needed
 # ──────────────────────────────
