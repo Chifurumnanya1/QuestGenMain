@@ -2,29 +2,9 @@
 # ──────────────────────────────────────────────────────────
 """
 MCQ Cleaner → Delimiter Blocks → JSON
-(robust, auto-batch, correct_answer fixed)
-
-• Paste QUESTIONS   (any messy layout)
-• Paste ANSWERS     (“1. C  2. A …”)
-
-Flow
-1. Pick a safe batch size so GPT-4o output never truncates.
-2. GPT rewrites each MCQ, adds option E, fixes grammar, and emits:
-
-   ##question
-   **option_a
-   **option_b
-   **option_c
-   **option_d
-   **option_e
-   %%difficulty
-   &&explanation_text
-
-3. After the call, we ZIP each returned block with the letter we sent,
-   so `correct_answer` is filled correctly.
-4. Local Python builds `created_at:""` and provides two downloads:
-   • gpt_blocks.txt   (raw delimiter text)
-   • mcq_output.json  (upload-ready JSON)
+• Auto-sizes GPT batches
+• Keeps correct_answer in sync
+• Adds newline before every «digit.» so ALL questions are detected
 """
 
 import json, re, textwrap
@@ -36,7 +16,7 @@ openai.api_key       = st.secrets["OPENAI_API_KEY"]
 MODEL                = "gpt-4o"
 TEMPERATURE          = 0.15
 MAX_MODEL_TOKENS     = 8000
-TOKENS_PER_MCQ       = 180          # worst-case
+TOKENS_PER_MCQ       = 180
 TOKENS_PROMPT_HEAD   = 750
 # ──────────────────────────
 def best_batch_size(total_q: int) -> int:
@@ -77,7 +57,7 @@ def safe(pattern: re.Pattern, text: str) -> Optional[str]:
     m = pattern.match(text)
     return m.group(1).strip() if m else None
 
-def parse_block(block: str, correct_letter: str) -> dict:
+def parse_block(block: str, letter: str) -> dict:
     lines = [ln for ln in block.strip().splitlines() if ln.strip()]
     if len(lines) < 7 or not lines[0].startswith("##"):
         raise ValueError("bad block")
@@ -101,7 +81,7 @@ def parse_block(block: str, correct_letter: str) -> dict:
         "difficulty": diff.lower(),
         "created_at": "",
     }
-    fld = LETTER2FIELD.get(correct_letter.upper(), "")
+    fld = LETTER2FIELD.get(letter.upper(), "")
     if fld and rec[fld]:
         rec["correct_answer"] = rec[fld]
     else:
@@ -109,50 +89,54 @@ def parse_block(block: str, correct_letter: str) -> dict:
     return rec
 
 # ───────── STREAMLIT UI ─────────
-st.title("🧠 MCQ → Delimiter → JSON (correct_answer fixed)")
+st.title("🧠 MCQ → Delimiter → JSON  (all questions detected)")
 
 raw_q = st.text_area("QUESTIONS block", height=300)
 raw_a = st.text_area("ANSWERS block (e.g. 1. C  2. A …)", height=120)
 
 if st.button("Generate"):
     if not raw_q.strip() or not raw_a.strip():
-        st.error("Need both blocks.")
+        st.error("Both blocks required.")
         st.stop()
 
-    ans_map  = {int(n): l.upper() for n, l in ANS_RE.findall(raw_a)}
-    q_chunks = [c.strip() for c in re.split(r"\n(?=\d+\.)", raw_q.strip()) if c.strip()]
-    BATCH_SZ = best_batch_size(len(q_chunks))
-    st.info(f"GPT batch size = {BATCH_SZ}")
+    ans_map = {int(n): l.upper() for n, l in ANS_RE.findall(raw_a)}
 
-    gpt_blocks_text = []
-    records         = []
+    # ---- NEW: force newline before every “digit.” pattern ----
+    normalized = re.sub(r"\s*(\d+\.)", r"\n\1", raw_q.strip())
+    q_chunks   = [c.strip() for c in re.split(r"\n(?=\d+\.)", normalized) if c.strip()]
 
-    for i in range(0, len(q_chunks), BATCH_SZ):
-        batch = q_chunks[i:i+BATCH_SZ]
-        letters, text_batch = [], []
+    batch_sz = best_batch_size(len(q_chunks))
+    st.info(f"GPT batch size = {batch_sz}")
+
+    records   = []
+    raw_parts = []
+
+    for i in range(0, len(q_chunks), batch_sz):
+        batch = q_chunks[i:i+batch_sz]
+        letters, payloads = [], []
 
         for chunk in batch:
             m = re.match(r"(\d+)", chunk)
             q_num = int(m.group(1)) if m else 10000+len(letters)
             letter = ans_map.get(q_num, "")
             letters.append(letter)
-            text_batch.append(f"{chunk}\n\nAnswer: {letter}")
+            payloads.append(f"{chunk}\n\nAnswer: {letter}")
 
-        reply = openai.chat.completions.create(
+        gpt_reply = openai.chat.completions.create(
             model=MODEL, temperature=TEMPERATURE,
             messages=[{"role":"system","content":SYSTEM_MSG},
-                      {"role":"user",  "content":"\n\n---\n\n".join(text_batch)}],
+                      {"role":"user",  "content":"\n\n---\n\n".join(payloads)}],
         ).choices[0].message.content.strip()
 
-        gpt_blocks_text.append(reply)
+        raw_parts.append(gpt_reply)
 
-        for blk, letter in zip(BLOCK_SPLIT.split(reply), letters):
+        for blk, letter in zip(BLOCK_SPLIT.split(gpt_reply), letters):
             try:
                 records.append(parse_block(blk, letter))
             except ValueError:
                 st.warning("Skipped malformed block.")
 
-    raw_text = "\n\n".join(gpt_blocks_text)
+    raw_text = "\n\n".join(raw_parts)
 
     st.download_button("📥 gpt_blocks.txt", raw_text.encode(),
                        "gpt_blocks.txt", "text/plain")
