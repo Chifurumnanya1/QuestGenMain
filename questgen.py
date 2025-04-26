@@ -103,7 +103,7 @@ if st.button("Generate JSON"):
     if a_raw.strip():
         user_msg += "\n\nANSWERS:\n" + a_raw.strip()
 
-    openai.api_key = st.secrets["OPENAI_API_KEY"]
+    openai.api_key = st.secrets["openai_api_key"]
 
     with st.spinner("GPT-4o is structuring your questions…"):
         rsp = openai.chat.completions.create(
