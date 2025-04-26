@@ -1,86 +1,107 @@
-# mcq_formatter.py
 import streamlit as st
 import openai
-import re, json, datetime
-from io import StringIO
+import io
 
-# ---- CONFIG -----------------------------------------------------------------
-st.set_page_config(page_title="MCQ Formatter → JSON", page_icon="🩺")
-openai.api_key = st.secrets.get("OPENAI_API_KEY")           # <── add in ☁ or .env
-MODEL = "gpt-4o"                                            # or any GPT-4-class model
-SYSTEM_PROMPT = """
-You are an expert medical-education content formatter.
-<insert the long instructions block you supplied verbatim here>
-""".strip()
-
-# ---- SIDEBAR ----------------------------------------------------------------
-st.sidebar.header("How it works")
-st.sidebar.markdown(
-"""
-1. Paste the raw **QUESTIONS** and **ANSWERS** text ↓  
-2. Click **Format with GPT-4o** – the LLM returns tidy blocks.  
-3. The app converts those blocks to the JSON list you need.  
-4. Download the file and use it anywhere.
-"""
+# Page configuration
+st.set_page_config(
+    page_title="MCQ to CSV via OpenAI",
+    page_icon="🤖",
+    layout="wide"
 )
 
-# ---- INPUTS -----------------------------------------------------------------
-st.title("🩺 MCQ Formatter → neat JSON")
-qs = st.text_area("Paste the *QUESTIONS* block here:", height=250)
-ans = st.text_area("Paste the *ANSWERS* block here:", height=120)
+# Helper functions
+def build_prompt(questions: str, answers: str) -> str:
+    return f"""
+You are an expert assistant that transforms multiple-choice questions into a CSV file.
 
-# ---- RUN LLM ----------------------------------------------------------------
-if st.button("⚙️ Format with GPT-4o", disabled=not (qs and ans)):
-    if not openai.api_key:
-        st.error("Missing OpenAI key – add OPENAI_API_KEY to Streamlit secrets.")
-        st.stop()
+Input:
+- Questions with options A-D in a text block.
+- Answers listing question numbers and letters (e.g., 1.A 2.C ...).
 
-    with st.spinner("Contacting GPT-4o …"):
-        user_prompt = f"QUESTIONS:\n{qs}\n\nANSWERS:\n{ans}"
-        chat = openai.ChatCompletion.create(
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.3,
-        )
-        formatted = chat.choices[0].message.content.strip()
-    st.success("Done! See output below 👇🏾")
-    st.code(formatted, language="text")
+Tasks:
+1. Parse questions and their options.
+2. Map the correct answer letters to the full option text.
+3. Generate a plausible wrong option E for each question.
+4. Write a concise explanation for the correct answer.
+5. Assign `difficulty` = "easy" if direct factual, else "medium".
+6. Use `topic_id` = 3 and `created_at` = "2025-04-26 00:00:00".
+7. Output CSV text with header:
+   id,topic_id,question_text,difficulty,correct_answer,option_a,option_b,option_c,option_d,option_e,explanation_text,created_at
 
-    # ---- PARSE CLEANED BLOCKS ------------------------------------------------
-    blocks = re.split(r"\n\s*\n", formatted)  # blank-line separator
-    json_list = []
-    now_iso = datetime.datetime.utcnow().isoformat()
+Ensure proper CSV quoting for commas inside fields.
 
-    for b in blocks:
-        lines = b.strip().splitlines()
-        if len(lines) != 8 or not lines[0].startswith("##"):
-            st.warning("Skipping malformed block:\n" + b)
-            continue
-        stem = lines[0][2:].strip()
-        difficulty = lines[6][2:].strip()        # after %%
-        explanation = lines[7][2:].strip()       # after &&
-        json_list.append({
-            "question_text": stem,
-            "difficulty": difficulty,
-            "explanation_text": explanation,
-            "correct_answer": None,              # or pull from key if desired
-            "created_at": now_iso,
-        })
+---
+{questions}\n\n{answers}
+"""  # noqa
 
-    json_str = json.dumps(json_list, indent=2, ensure_ascii=False)
-    st.subheader("📄 Generated JSON")
-    st.code(json_str, language="json")
-
-    # ---- DOWNLOAD ------------------------------------------------------------
-    st.download_button(
-        label="💾 Download JSON file",
-        data=json_str,
-        file_name="formatted_questions.json",
-        mime="application/json",
+@st.cache_data
+def generate_csv_from_openai(prompt: str, api_key: str) -> str:
+    openai.api_key = api_key
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.2,
+        max_tokens=4096
     )
+    return response.choices[0].message.content.strip()
 
-# ---- FOOTER -----------------------------------------------------------------
-st.caption("Built with ❤️ & Streamlit • GPT-4o • 2025")
+# Sidebar for inputs
+st.sidebar.header("Configuration")
+api_key_input = st.sidebar.text_input(
+    "OpenAI API Key",
+    value=st.secrets.get("OPENAI_API_KEY", ""),
+    type="password",
+    help="Store your key in Streamlit Cloud secrets as OPENAI_API_KEY for security."
+)
+
+st.sidebar.markdown("---")
+difficulty_hint = st.sidebar.selectbox(
+    "Default difficulty threshold",
+    options=["20 questions → easy; else medium", "All easy", "All medium"],
+    index=0,
+    help="Choose how difficulty is assigned."
+)
+
+# Main UI
+st.title("🤖 MCQ to CSV Generator")
+st.markdown(
+    "Paste your questions and answer key, then click **Generate CSV**."
+)
+questions_text = st.text_area(
+    "Questions + Options (A-D)",
+    height=300,
+    placeholder="1. Question text? a. Option1 b. Option2 c. Option3 d. Option4"
+)
+answers_text = st.text_area(
+    "Answer Key (e.g., 1.B 2.A 3.C)",
+    height=100,
+    placeholder="1.B 2.A 3.C ..."
+)
+
+if st.button("Generate CSV"):
+    if not api_key_input:
+        st.error("🔑 Please provide your OpenAI API key in the sidebar.")
+    elif not questions_text.strip() or not answers_text.strip():
+        st.error("✏️ Please paste both the questions and the answers.")
+    else:
+        prompt = build_prompt(questions_text, answers_text)
+        with st.spinner("⏳ Generating CSV via OpenAI..."):
+            try:
+                csv_output = generate_csv_from_openai(prompt, api_key_input)
+                st.success("✅ CSV generated successfully.")
+                st.download_button(
+                    label="📥 Download CSV",
+                    data=csv_output,
+                    file_name="mcq_questions.csv",
+                    mime="text/csv"
+                )
+                st.text_area("CSV Preview", csv_output, height=300)
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
+
+# Footer
+st.markdown("---")
+st.caption("Built with ❤️ using Streamlit and OpenAI API")
