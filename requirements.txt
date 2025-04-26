@@ -1,12 +1,2 @@
-streamlit
-openai>=1.15
-llama-index==0.10.9
-llama-index[doc_support]
-llama-index-vector-stores-faiss
-faiss-cpu
-unstructured
-pdfplumber
-python-docx
-docx2txt
-pillow
-requests
+streamlit>=1.32
+openai>=1.14
