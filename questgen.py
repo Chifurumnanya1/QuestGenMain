@@ -4,7 +4,7 @@ import json, re, textwrap
 from datetime import datetime, timezone
 import openai, streamlit as st
 
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+openai.api_key = st.secrets["openai_api_key"]
 MODEL = "gpt-4o"
 QUESTIONS_PER_BATCH = 8          # for the expensive “full” prompt later
 
