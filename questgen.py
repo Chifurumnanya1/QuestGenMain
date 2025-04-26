@@ -1,101 +1,61 @@
 import streamlit as st
-from openai import OpenAI
-import io
+import openai
+from datetime import datetime
 
-# Page Configuration
-st.set_page_config(
-    page_title="MCQ to CSV via OpenAI",
-    page_icon="🤖",
-    layout="wide"
-)
+# Set your OpenAI API key
+openai.api_key = st.secrets["OPENAI_API_KEY"]  # Use streamlit secrets for better security
 
-# Build the system prompt
+# System Prompt
+SYSTEM_PROMPT = """
+You are an expert MCQ formatter.
+You will receive messy MCQ questions and answer keys.
+Your job is to:
+- Correct spelling and grammar mistakes.
+- Reframe unclear questions without changing their meaning.
+- Group each question nicely:
+    - Numbered properly.
+    - Each with options A, B, C, D.
+    - Show the correct answer clearly.
+Do not add any intro or outro text, only clean MCQs.
+After each question, show "**Correct Answer: X. (Option text)**" exactly.
+"""
 
-def build_prompt(questions: str, answers: str) -> str:
-    return f"""
-You are an expert assistant that transforms every provided multiple-choice question into a CSV file—do not output only a sample.
-
-Input:
-- All questions with options A-D in a text block.
-- Answers listing question numbers and letters (e.g., 1.A 2.C ...).
-
-Tasks:
-1. Parse all questions and their options (do not omit any).
-2. Map each correct answer letter to its full option text.
-3. Generate a plausible wrong option E for each question.
-4. Write a concise explanation for why the chosen answer is correct.
-5. Assign difficulty="easy" if factual, else "medium".
-6. Use topic_id=3 and created_at="2025-04-26 00:00:00".
-7. Output ONLY the raw CSV content with header, without any preamble or postamble:
-   id,topic_id,question_text,difficulty,correct_answer,option_a,option_b,option_c,option_d,option_e,explanation_text,created_at
-
-Ensure all fields are comma-separated and quote fields containing commas.
-
----
-{questions}\n\n{answers}
-"""  # noqa
-
-# Cached call to OpenAI
-@st.cache_data
-
-def generate_csv_from_openai(prompt: str, api_key: str) -> str:
-    client = OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model="gpt-4",
+def call_openai(user_prompt):
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",  # Use gpt-4-turbo or gpt-4o for cheaper and faster responses
         messages=[
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": prompt}
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt}
         ],
-        temperature=0.2,
-        max_tokens=4096
+        temperature=0.1,  # Keep it very low for accuracy
+        max_tokens=4000
     )
-    return response.choices[0].message.content.strip()
+    return response['choices'][0]['message']['content']
 
-# Sidebar Configuration
-st.sidebar.header("Configuration")
-api_key = st.sidebar.text_input(
-    "OpenAI API Key", 
-    value=st.secrets.get("OPENAI_API_KEY", ""),
-    type="password",
-    help="Store in Streamlit Cloud secrets as OPENAI_API_KEY."
-)
+# Streamlit App
+st.set_page_config(page_title="MCQ Cleaner AI", page_icon="🧠", layout="wide")
 
-# Main UI
-st.title("🤖 MCQ to CSV Generator")
-st.markdown("Paste your questions and answers, then click **Generate CSV**.")
+st.title("🧠 MCQ Formatter using OpenAI")
+st.write("Paste your messy MCQ text and answers, AI will clean it for you!")
 
-questions_text = st.text_area(
-    "Questions + Options (A-D)",
-    height=300,
-    placeholder="1. Sample question? a. Opt1 b. Opt2 c. Opt3 d. Opt4"
-)
+st.subheader("📝 Paste Your Raw MCQs Below")
+raw_mcqs = st.text_area("Raw MCQs", height=300, help="Paste your questions and options here.")
 
-answers_text = st.text_area(
-    "Answer Key (e.g., 1.B 2.A 3.C)",
-    height=100,
-    placeholder="1.B 2.A 3.C ..."
-)
+st.subheader("🔑 Paste Your Answer Keys Below")
+answer_keys = st.text_area("Answer Keys (e.g., 1.B 2.A 3.C)", height=100)
 
-if st.button("Generate CSV"):
-    if not api_key:
-        st.error("🔑 Enter your OpenAI API key in the sidebar.")
-    elif not questions_text.strip() or not answers_text.strip():
-        st.error("✏️ Paste both questions and answers.")
+if st.button("🚀 Clean and Format with AI"):
+    if not raw_mcqs.strip() or not answer_keys.strip():
+        st.error("⚠️ Please paste both MCQs and Answer Keys.")
     else:
-        prompt = build_prompt(questions_text, answers_text)
-        with st.spinner("⏳ Generating CSV via OpenAI..."):
-            try:
-                csv_output = generate_csv_from_openai(prompt, api_key)
-                st.success("✅ CSV generated!")
-                st.download_button(
-                    "📥 Download CSV",
-                    data=csv_output,
-                    file_name="mcq_questions.csv",
-                    mime="text/csv"
-                )
-            except Exception as e:
-                st.error(f"❌ {e}")
-
-# Footer
-st.markdown("---")
-st.caption("Built with ❤️ using Streamlit & OpenAI v1 API")
+        user_prompt = f"Here are the MCQs:\n{raw_mcqs}\n\nHere are the correct answers:\n{answer_keys}"
+        with st.spinner("Talking to OpenAI..."):
+            cleaned_mcqs = call_openai(user_prompt)
+        st.success("✅ MCQs cleaned successfully!")
+        st.download_button(
+            label="📥 Download Cleaned MCQs",
+            data=cleaned_mcqs,
+            file_name=f"cleaned_mcqs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            mime="text/plain"
+        )
+        st.code(cleaned_mcqs, language="markdown")
