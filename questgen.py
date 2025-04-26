@@ -31,7 +31,7 @@ from typing import Optional
 import openai, streamlit as st
 
 # ─────────── CONFIG ───────────
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+openai.api_key = st.secrets["openai_api_key"]
 MODEL              = "gpt-4o"
 TEMPERATURE        = 0.15
 MAX_MODEL_TOKENS   = 8000                       # GPT-4o hard limit
