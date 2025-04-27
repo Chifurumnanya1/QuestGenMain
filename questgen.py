@@ -7,7 +7,7 @@ from io import StringIO, BytesIO
 # Initialize OpenAI client
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# SYSTEM PROMPT (strict CSV rules)
+# System Prompt (STRICT for CSV structure)
 SYSTEM_PROMPT = """
 You are an expert MCQ formatter and CSV generator.
 You will receive messy MCQs and answer keys.
@@ -15,20 +15,21 @@ You will receive messy MCQs and answer keys.
 For each MCQ:
 - Correct grammar and structure.
 - Create four options: A, B, C, D.
-- Invent an extra wrong option E.
-- Match correct_answer by full exact option text.
-- Generate a short 1-2 line explanation_text.
+- Invent an extra wrong option E (different from correct answer).
+- Match correct_answer by the full exact option text.
+- Generate a short 1-2 sentence explanation why the correct answer is correct.
 - Set difficulty as "easy".
 - Leave created_at blank.
 
-Format ONLY clean CSV with this header:
+Format ONLY clean CSV text with the following header:
 
 id,question_text,difficulty,correct_answer,option_a,option_b,option_c,option_d,option_e,explanation_text,created_at
 
 STRICT RULES:
 - Enclose every text field inside double quotes ("...") if necessary.
-- Escape any internal quotes properly.
-- Ensure clean CSV format, no markdown, no JSON, no extra text.
+- Escape inner quotes properly (" becomes "").
+- Never leave unclosed quotation marks.
+- No JSON, no Markdown, only clean CSV text.
 """
 
 def call_openai(user_prompt):
@@ -48,9 +49,9 @@ def split_into_batches(text_list, batch_size=30):
         yield text_list[i:i+batch_size]
 
 # Streamlit App
-st.set_page_config(page_title="MCQ Excel Generator", page_icon="📄", layout="wide")
-st.title("📄 MCQ Cleaner and Excel Generator (with Batching & Download)")
-st.write("Paste your messy MCQs and answers. AI will clean, explain, and give you an Excel file!")
+st.set_page_config(page_title="MCQ to Excel Generator", page_icon="📄", layout="wide")
+st.title("📄 MCQ Cleaner and Excel Generator (with Batching & No Empty Rows)")
+st.write("Paste your messy MCQs and answers, get a clean downloadable Excel file!")
 
 st.subheader("📝 Paste Your Raw MCQs Below")
 raw_mcqs = st.text_area("Raw MCQs", height=300, placeholder="Paste your questions and options here...")
@@ -74,28 +75,33 @@ if st.button("🚀 Generate Excel File"):
             with st.spinner(f"Processing batch {batch_num + 1} of {len(batches)}..."):
                 batch_csv = call_openai(user_prompt)
 
-            # Parse batch CSV safely
-            batch_csv_io = StringIO(batch_csv)
+            # 🛠 Clean batch CSV by removing empty lines
+            batch_csv_cleaned = "\n".join([line for line in batch_csv.splitlines() if line.strip()])
+
+            batch_csv_io = StringIO(batch_csv_cleaned)
             df_batch = pd.read_csv(batch_csv_io, quoting=1)
 
+            # Correct ID numbering
             df_batch['id'] = range(current_id, current_id + len(df_batch))
             current_id += len(df_batch)
 
             all_batches.append(df_batch)
 
-        # Combine all batches into a single DataFrame
+        # Combine all batches
         final_df = pd.concat(all_batches, ignore_index=True)
 
-        # Generate Excel file in memory
+        # Create Excel file
         excel_buffer = BytesIO()
-        final_df.to_excel(excel_buffer, index=False, sheet_name="MCQs")
+        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+            final_df.to_excel(writer, index=False, sheet_name="MCQs")
+
         excel_buffer.seek(0)
 
         st.success("✅ MCQs cleaned and formatted successfully!")
 
-        # Download button
+        # Download Button
         st.download_button(
-            label="📥 Download MCQs as Excel File (.xlsx)",
+            label="📥 Download Cleaned MCQs (Excel .xlsx)",
             data=excel_buffer,
             file_name=f"mcqs_cleaned_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
