@@ -3,124 +3,129 @@ from openai import OpenAI
 import pandas as pd
 from datetime import datetime
 from io import StringIO, BytesIO
+import textwrap, re, time
 
-# Initialize OpenAI client
+# --------------------  CONFIG  --------------------
+st.set_page_config(page_title="MCQ → Excel (self-healing)",
+                   page_icon="📄", layout="wide")
+
+# OpenAI
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# SYSTEM PROMPT
 SYSTEM_PROMPT = """
 You are an expert MCQ formatter and CSV generator.
-You will receive messy MCQs and answer keys.
-
-For each MCQ:
-- Correct grammar and structure.
-- Create options A, B, C, D.
-- Invent a wrong option E.
-- Match correct_answer using the exact text from the correct option.
-- Generate a short explanation_text.
-- Set difficulty as "easy".
-- Leave created_at blank.
-
-Format ONLY clean CSV text with this header:
-
+For each MCQ you receive you must:
+- Correct grammar.
+- Provide 5 options: A,B,C,D (real) plus E (wrong filler).
+- Use the full option text for correct_answer.
+- Add a 1–2-sentence explanation_text.
+- difficulty = "easy", created_at = blank.
+Return **ONLY** pure CSV rows with this header:
 id,question_text,difficulty,correct_answer,option_a,option_b,option_c,option_d,option_e,explanation_text,created_at
-
-STRICT RULES:
-- Enclose every text field inside double quotes ("...") if necessary.
-- Escape internal quotes properly.
-- No markdown, no JSON, no extra text.
+Wrap any field that contains a comma or quote in double quotes, escape internal quotes (“text → ""text"").
+Never leave blank lines between rows.
+Never output markdown, JSON or commentary.
 """
 
-def call_openai(user_prompt):
-    response = client.chat.completions.create(
+# --------------------  HELPERS  --------------------
+def chat(prompt: str) -> str:
+    """Call GPT-4o and return assistant content."""
+    resp = client.chat.completions.create(
         model="gpt-4o",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt}
+            {"role": "user",   "content": prompt}
         ],
-        temperature=0.2,
-        max_tokens=4000
-    )
-    return response.choices[0].message.content
+        temperature=0.15,
+        max_tokens=4000)
+    return resp.choices[0].message.content
 
-def split_into_batches(lst, batch_size=30):
-    for i in range(0, len(lst), batch_size):
-        yield lst[i:i+batch_size]
+def parse_answers(raw: str) -> dict[int,str]:
+    """'1.B 2.A 3.C'  →  {1:'B',2:'A',3:'C'}"""
+    out = {}
+    for piece in re.findall(r'(\d+\.[A-Ea-e])', raw):
+        q, ans = piece.split('.')
+        out[int(q)] = ans.upper()
+    return out
 
-def parse_answer_keys(answer_text):
-    # Parse "1.B 2.A 3.C" into a dictionary
-    mapping = {}
-    parts = answer_text.strip().split()
-    for p in parts:
-        if '.' in p:
-            q_num, ans = p.split('.')
-            mapping[int(q_num.strip())] = ans.strip().upper()
-    return mapping
+def split_batches(lst, n):
+    for i in range(0, len(lst), n):
+        yield lst[i:i+n], i            # i == index offset (0-based)
 
-# Streamlit App
-st.set_page_config(page_title="MCQ Excel Generator", page_icon="📄", layout="wide")
-st.title("📄 MCQ Cleaner and Excel Generator (Safe Batching)")
+def rows_ok(df: pd.DataFrame, expected: int) -> bool:
+    return len(df) == expected and not df.isna().all(axis=1).any()
 
-st.subheader("📝 Paste Your Raw MCQs Below")
-raw_mcqs = st.text_area("Raw MCQs", height=300, placeholder="Paste your MCQ questions here...")
+# --------------------  UI  --------------------
+st.title("📄 MCQ Cleaner → Excel (with auto-retry)")
 
-st.subheader("🔑 Paste Your Answer Keys Below")
-answer_keys = st.text_area("Answer Keys", height=100, placeholder="Example: 1.B 2.A 3.C 4.D")
+batch_size_ui = st.sidebar.selectbox(
+    "Initial batch size", [10, 20, 30, 40, 50], index=2)
 
-if st.button("🚀 Generate Excel File"):
-    if not raw_mcqs.strip() or not answer_keys.strip():
-        st.error("⚠️ Please paste both MCQs and Answer Keys.")
-    else:
-        mcq_lines = raw_mcqs.strip().split("\n")
-        answers_dict = parse_answer_keys(answer_keys)
+raw_mcqs   = st.text_area("Paste raw MCQs", height=300)
+raw_keys   = st.text_area("Paste answer keys (e.g. 1.B 2.A …)", height=100)
+retry_log  = st.sidebar.empty()
 
-        batches = list(split_into_batches(mcq_lines, batch_size=30))
-        all_batches = []
-        current_id = 1
-        
-        for batch_num, batch_mcqs in enumerate(batches):
-            batch_start = batch_num * 30 + 1
-            batch_end = batch_start + len(batch_mcqs) - 1
-            
-            # Prepare matching answers for this batch
-            batch_answers = " ".join(
-                f"{q}.{answers_dict[q]}" for q in range(batch_start, batch_end + 1) if q in answers_dict
-            )
-            
-            batch_text = "\n".join(batch_mcqs)
-            user_prompt = f"Here are some MCQs:\n{batch_text}\n\nHere are the correct answers:\n{batch_answers}"
-            
-            with st.spinner(f"Processing batch {batch_num + 1} of {len(batches)}..."):
-                batch_csv = call_openai(user_prompt)
+if st.button("🚀 Generate Excel"):
+    if not raw_mcqs.strip() or not raw_keys.strip():
+        st.warning("Please provide both MCQs and answer keys.")
+        st.stop()
 
-            batch_csv_cleaned = "\n".join([line for line in batch_csv.splitlines() if line.strip()])
+    mcq_blocks = [blk.strip() for blk in re.split(r'\n(?=\d+\.)', raw_mcqs) if blk.strip()]
+    answers    = parse_answers(raw_keys)
 
-            batch_csv_io = StringIO(batch_csv_cleaned)
-            df_batch = pd.read_csv(batch_csv_io, quoting=1)
+    bad_chunks = []
+    dfs        = []
+    next_id    = 1
 
-            # Fix ID numbering
-            df_batch['id'] = range(current_id, current_id + len(df_batch))
-            current_id += len(df_batch)
+    for chunk, offset in split_batches(mcq_blocks, batch_size_ui):
+        start_no = offset+1
+        end_no   = offset+len(chunk)
+        key_subset = " ".join(f"{n}.{answers.get(n,'')}" for n in range(start_no, end_no+1) if n in answers)
 
-            all_batches.append(df_batch)
+        prompt = f"MCQs:\n{'\n'.join(chunk)}\n\nAnswers:\n{key_subset}"
+        with st.spinner(f"Batch {start_no}–{end_no}"):
+            csv_text = chat(prompt)
 
-        final_df = pd.concat(all_batches, ignore_index=True)
+        cleaned = "\n".join(x for x in csv_text.splitlines() if x.strip())
+        df = pd.read_csv(StringIO(cleaned), quoting=1)
 
-        # Create Excel file
-        excel_buffer = BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-            final_df.to_excel(writer, index=False, sheet_name="MCQs")
+        if not rows_ok(df, len(chunk)):                # first try failed ➜ retry by 10s
+            retry_log.warning(f"❗ Retry batch {start_no}-{end_no} in sub-chunks of 10")
+            for sub, sub_off in split_batches(chunk, 10):
+                s_start = start_no + sub_off
+                s_end   = s_start + len(sub)-1
+                sub_ans = " ".join(f"{n}.{answers.get(n,'')}" for n in range(s_start, s_end+1) if n in answers)
+                sub_prompt = f"MCQs:\n{'\n'.join(sub)}\n\nAnswers:\n{sub_ans}"
+                with st.spinner(f"Retry {s_start}–{s_end}"):
+                    sub_csv = chat(sub_prompt)
+                sub_df = pd.read_csv(StringIO("\n".join(l for l in sub_csv.splitlines() if l.strip())), quoting=1)
 
-        excel_buffer.seek(0)
+                if rows_ok(sub_df, len(sub)):
+                    df = pd.concat([df, sub_df], ignore_index=True)
+                else:
+                    bad_chunks.extend(range(s_start, s_end+1))
 
-        st.success("✅ MCQs generated successfully!")
+        # re-index IDs
+        df["id"] = range(next_id, next_id+len(df))
+        next_id += len(df)
+        dfs.append(df)
 
-        st.download_button(
-            label="📥 Download MCQs (Excel .xlsx)",
-            data=excel_buffer,
-            file_name=f"mcqs_cleaned_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    final_df = pd.concat(dfs, ignore_index=True)
 
-        st.subheader("🔎 Preview of MCQs:")
-        st.dataframe(final_df)
+    if bad_chunks:
+        retry_log.error(f"⚠️ Still missing rows for: {bad_chunks}")
+
+    # ---------------- Excel output ----------------
+    xls = BytesIO()
+    with pd.ExcelWriter(xls, engine="openpyxl") as wrt:
+        final_df.to_excel(wrt, index=False, sheet_name="MCQs")
+    xls.seek(0)
+
+    st.success(f"Done! {len(final_df)} MCQs processed.")
+    st.download_button("📥 Download Excel",
+                       data=xls,
+                       file_name=f"mcqs_{datetime.utcnow():%Y%m%d_%H%M%S}.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    st.subheader("Preview")
+    st.dataframe(final_df, use_container_width=True)
