@@ -1,91 +1,61 @@
-# app.py
+# streamlit_mcq_processor.py
 
 import streamlit as st
-import re
-import openai
+from google import genai
 
-# 1. App configuration
-st.set_page_config(
-    page_title="MCQ Formatter AI Pipeline",
-    layout="wide",
-    initial_sidebar_state="expanded"
+# — INSTALLATION —
+# pip install streamlit google-genai
+
+# — CONFIGURATION —
+# Create .streamlit/secrets.toml:
+# [defaults]
+# GEMINI_API_KEY = "<YOUR_GEMINI_API_KEY>"
+
+# Initialize the Gemini client
+client = genai.Client(
+    vertexai=True,
+    api_key=st.secrets["defaults"]["GEMINI_API_KEY"]
 )
 
-# 2. Sidebar / Secrets
-# Streamlit Cloud stores your secret as OPENAI_API_KEY in st.secrets
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+st.title("MCQ → JSON with Explanations")
 
-# 3. UI
-st.title("MCQ Formatter AI Pipeline")
-st.markdown(
-    """
-    Paste your block of MCQ questions and the corresponding answers below.
-    The AI will:
-    - Improve readability of each question
-    - Generate a wrong 5th option (`option_e`)
-    - Provide an explanation for the correct answer
-    The output uses `===ENTRY===` delimiters so you can parse it into JSON locally.
-    """
+block = st.text_area(
+    "Paste your full questions + SECTION A: ANSWER key block here:",
+    height=400
 )
 
-questions_block = st.text_area("MCQ Questions Block", height=300, help="Include numbered questions with options (a)-(d).")
-answers_block = st.text_area("Answers Block", height=150, help="Format like `1C 2A 3D ...`")
+if st.button("Generate JSON"):
+    prompt = f"""
+You are given a block of text containing:
+1) Numbered multiple‐choice questions with options labeled (a), (b), (c), (d), (e).
+2) A “SECTION A: OBJECTIVE ANSWER” key listing mappings like “1C”, “2A”, …, “120B”.
 
-if st.button("Format MCQs"):
-    # 4. Parse questions
-    lines = questions_block.splitlines()
-    questions = []
-    for line in lines:
-        m = re.match(r'^\s*(\d+)\.\s*(.+)$', line)
-        if m:
-            questions.append(m.group(2).strip())
-    
-    # 5. Parse answers
-    # Matches patterns like "1C" or "2. A"
-    raw = answers_block.replace(",", " ")
-    answer_pairs = re.findall(r'(\d+)\.?\s*([A-E])', raw, re.IGNORECASE)
-    # Sort by question number
-    answer_pairs.sort(key=lambda x: int(x[0]))
-    answers = [ans.upper() for _, ans in answer_pairs]
-    
-    if len(questions) != len(answers):
-        st.error(f"Parsed {len(questions)} questions but {len(answers)} answers. Please check formatting.")
-    else:
-        # 6. Build prompt
-        q_block = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
-        a_block = "\n".join(f"{i+1}. {a}" for i, a in enumerate(answers))
-        prompt = f"""Here are the multiple choice questions:
-{q_block}
+Parse each question into a JSON object with these exact keys:
+- question_text: the question stem.
+- option_a, option_b, option_c, option_d, option_e: the full text of each option.
+- correct_answer: the letter (A–E) that matches the answer key, or null if the key letter doesn't match any option.
+- explanation_text: one concise sentence explaining why the correct answer is right (or noting “Answer key mismatch – please review.” if null).
+- difficulty: set to “medium” for all.
+- created_at: leave as an empty string.
 
-Here are the corresponding correct answers:
-{a_block}
+Output ONLY a JSON array of these objects, with no surrounding commentary.
 
-For each question:
-- Improve readability of the question text.
-- Generate a completely wrong fifth option (option_e).
-- Provide an explanation_text for the correct answer.
+Text block:
+{block}
+"""
+    with st.spinner("Calling Gemini..."):
+        response = client.models.generate_content(
+            model="gemini-2.0-flash-001",
+            contents=prompt,
+        )
+    json_output = response.text
 
-Output the results in plain text. For each question entry, use "===ENTRY===" as a delimiter before it, and inside each entry format exactly as:
+    st.subheader("Generated JSON")
+    st.code(json_output, language="json")
 
-QUESTION_TEXT: <improved question>
-OPTION_E: <wrong option>
-EXPLANATION_TEXT: <explanation>
-
-Do not include any additional text."""
-        
-        # 7. Call OpenAI
-        with st.spinner("Formatting MCQs, please wait..."):
-            resp = openai.ChatCompletion.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are an expert at formatting MCQ questions."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                max_tokens=outputs := None  # Let API decide; adjust if needed
-            )
-            formatted = resp.choices[0].message.content.strip()
-        
-        # 8. Display result
-        st.subheader("Formatted MCQs (Delimited)")
-        st.code(formatted, language="text")
+    st.download_button(
+        "Download JSON",
+        data=json_output,
+        file_name="questions.json",
+        mime="application/json"
+    )
