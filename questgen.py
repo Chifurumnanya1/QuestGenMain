@@ -1,85 +1,91 @@
+# app.py
+
 import streamlit as st
-from openai import OpenAI
-import pandas as pd
-import json, re, textwrap
-from datetime import datetime
-from io import StringIO, BytesIO
+import re
+import openai
 
-# ── OpenAI init ───────────────────────────────────────────────────────────────
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# 1. App configuration
+st.set_page_config(
+    page_title="MCQ Formatter AI Pipeline",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-SYSTEM_PROMPT = """
-You are an expert MCQ formatter.
-Return ONLY a valid JSON array (no markdown) where each element has:
-"id","question_text","difficulty","correct_answer",
-"option_a","option_b","option_c","option_d","option_e",
-"explanation_text","created_at".
-• Fix grammar, invent a wrong option_e, generate a 1-2-sentence explanation.
-• difficulty="easy", created_at="".
-"""
+# 2. Sidebar / Secrets
+# Streamlit Cloud stores your secret as OPENAI_API_KEY in st.secrets
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# ── helpers ───────────────────────────────────────────────────────────────────
-def chat(prompt: str) -> str:
-    resp = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role":"system","content":SYSTEM_PROMPT},
-                  {"role":"user",  "content":prompt}],
-        temperature=0.15, max_tokens=4000)
-    return resp.choices[0].message.content.strip()
+# 3. UI
+st.title("MCQ Formatter AI Pipeline")
+st.markdown(
+    """
+    Paste your block of MCQ questions and the corresponding answers below.
+    The AI will:
+    - Improve readability of each question
+    - Generate a wrong 5th option (`option_e`)
+    - Provide an explanation for the correct answer
+    The output uses `===ENTRY===` delimiters so you can parse it into JSON locally.
+    """
+)
 
-def parse_keys(raw: str) -> dict[int,str]:
-    m={}
-    for piece in re.findall(r'(\d+\.[A-Ea-e])', raw):
-        q,ans = piece.split('.'); m[int(q)]=ans.upper()
-    return m
+questions_block = st.text_area("MCQ Questions Block", height=300, help="Include numbered questions with options (a)-(d).")
+answers_block = st.text_area("Answers Block", height=150, help="Format like `1C 2A 3D ...`")
 
-def chunk(lst,n):
-    for i in range(0,len(lst),n): yield lst[i:i+n],i
+if st.button("Format MCQs"):
+    # 4. Parse questions
+    lines = questions_block.splitlines()
+    questions = []
+    for line in lines:
+        m = re.match(r'^\s*(\d+)\.\s*(.+)$', line)
+        if m:
+            questions.append(m.group(2).strip())
+    
+    # 5. Parse answers
+    # Matches patterns like "1C" or "2. A"
+    raw = answers_block.replace(",", " ")
+    answer_pairs = re.findall(r'(\d+)\.?\s*([A-E])', raw, re.IGNORECASE)
+    # Sort by question number
+    answer_pairs.sort(key=lambda x: int(x[0]))
+    answers = [ans.upper() for _, ans in answer_pairs]
+    
+    if len(questions) != len(answers):
+        st.error(f"Parsed {len(questions)} questions but {len(answers)} answers. Please check formatting.")
+    else:
+        # 6. Build prompt
+        q_block = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
+        a_block = "\n".join(f"{i+1}. {a}" for i, a in enumerate(answers))
+        prompt = f"""Here are the multiple choice questions:
+{q_block}
 
-# ── UI ────────────────────────────────────────────────────────────────────────
-st.set_page_config("MCQ → JSON", "🗂", layout="wide")
-st.title("🗂 MCQ Cleaner → JSON")
+Here are the corresponding correct answers:
+{a_block}
 
-batch_sz = st.sidebar.selectbox("Batch size", [20,30,40,50], 1)
+For each question:
+- Improve readability of the question text.
+- Generate a completely wrong fifth option (option_e).
+- Provide an explanation_text for the correct answer.
 
-raw_mcq = st.text_area("Paste raw MCQs", height=300)
-raw_key = st.text_area("Paste answer keys  (e.g. 1.B 2.A …)", height=100)
+Output the results in plain text. For each question entry, use "===ENTRY===" as a delimiter before it, and inside each entry format exactly as:
 
-if st.button("Generate JSON"):
-    if not raw_mcq.strip() or not raw_key.strip():
-        st.warning("Please paste MCQs and answer keys"); st.stop()
+QUESTION_TEXT: <improved question>
+OPTION_E: <wrong option>
+EXPLANATION_TEXT: <explanation>
 
-    blocks   = [b.strip() for b in re.split(r'\n(?=\d+\.)',raw_mcq) if b.strip()]
-    keys_map = parse_keys(raw_key)
-
-    all_rows=[]; next_id=1; missing=[]
-    for chunk_mcq,off in chunk(blocks,batch_sz):
-        start=off+1; end=start+len(chunk_mcq)-1
-        key_subset=" ".join(f"{i}.{keys_map.get(i,'')}"
-                            for i in range(start,end+1) if i in keys_map)
-        user_prompt = f"MCQs:\n{'\n'.join(chunk_mcq)}\n\nAnswers:\n{key_subset}"
-        with st.spinner(f"Batch {start}-{end}"):
-            raw_json = chat(user_prompt)
-
-        try:
-            rows = json.loads(raw_json)
-            if len(rows)!=len(chunk_mcq): raise ValueError
-        except Exception:
-            missing.extend(range(start,end+1)); continue
-
-        # patch id sequence
-        for r in rows:
-            r["id"]=next_id; next_id+=1
-        all_rows.extend(rows)
-
-    if missing:
-        st.error(f"⚠️ Still missing MCQs: {missing[:10]}{'…' if len(missing)>10 else ''}")
-
-    # download + preview
-    json_data = json.dumps(all_rows, ensure_ascii=False, indent=2)
-    st.download_button("📥 Download JSON",
-                       data=json_data,
-                       file_name=f"mcqs_{datetime.utcnow():%Y%m%d_%H%M%S}.json",
-                       mime="application/json")
-    st.subheader("Preview")
-    st.json(all_rows[: min(50,len(all_rows))])
+Do not include any additional text."""
+        
+        # 7. Call OpenAI
+        with st.spinner("Formatting MCQs, please wait..."):
+            resp = openai.ChatCompletion.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are an expert at formatting MCQ questions."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=outputs := None  # Let API decide; adjust if needed
+            )
+            formatted = resp.choices[0].message.content.strip()
+        
+        # 8. Display result
+        st.subheader("Formatted MCQs (Delimited)")
+        st.code(formatted, language="text")
