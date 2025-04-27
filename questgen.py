@@ -14,7 +14,7 @@ from google import genai
 # Initialize the Gemini client
 client = genai.Client(
     vertexai=True,
-    api_key=st.secrets["defaults"]["GEMINI_API_KEY"]
+    api_key=st.secrets["GEMINI_API_KEY"]
 )
 
 st.title("MCQ → JSON with Explanations")
