@@ -1,61 +1,76 @@
-# streamlit_mcq_processor.py
-
+import re
+import json
+import io
 import streamlit as st
-from google import genai
 
-# — INSTALLATION —
-# pip install streamlit google-genai
 
-# — CONFIGURATION —
-# Create .streamlit/secrets.toml:
-# [defaults]
-# GEMINI_API_KEY = "<YOUR_GEMINI_API_KEY>"
+# ── Helper --------------------------------------------------------------------
+def clean(text: str) -> str:
+    """Trim ends and collapse internal whitespace."""
+    return re.sub(r"\s+", " ", text.strip())
 
-# Initialize the Gemini client
-client = genai.Client(
-    vertexai=True,
-    api_key=st.secrets["GEMINI_API_KEY"]
-)
 
-st.title("MCQ → JSON with Explanations")
+def parse_questions(txt: str) -> list[dict]:
+    """Return a list of question-dicts in the required schema."""
+    questions = []
 
-block = st.text_area(
-    "Paste your full questions + SECTION A: ANSWER key block here:",
-    height=400
-)
+    # split into Q-blocks → from “Q<number>.” up to next “Q<number>.” or EOF
+    for block in re.findall(r"(Q\d+\.[\s\S]*?)(?=\nQ\d+\.|\Z)", txt, re.MULTILINE):
+        q_line, rest = block.split("\n", maxsplit=1)
+        question_text = clean(re.sub(r"^Q\d+\.\s*", "", q_line))
 
-if st.button("Generate JSON"):
-    prompt = f"""
-You are given a block of text containing:
-1) Numbered multiple‐choice questions with options labeled (a), (b), (c), (d), (e).
-2) A “SECTION A: OBJECTIVE ANSWER” key listing mappings like “1C”, “2A”, …, “120B”.
+        # options
+        opts = dict(re.findall(r"^\s*\(([A-D])\)\s*(.*)", rest, re.MULTILINE))
+        option_a = clean(opts.get("A", ""))
+        option_b = clean(opts.get("B", ""))
+        option_c = clean(opts.get("C", ""))
+        option_d = clean(opts.get("D", ""))
 
-Parse each question into a JSON object with these exact keys:
-- question_text: the question stem.
-- option_a, option_b, option_c, option_d, option_e: the full text of each option.
-- correct_answer: the letter (A–E) that matches the answer key, or null if the key letter doesn't match any option.
-- explanation_text: one concise sentence explaining why the correct answer is right (or noting “Answer key mismatch – please review.” if null).
-- difficulty: set to “medium” for all.
-- created_at: leave as an empty string.
+        # answer & explanation
+        ans_m = re.search(r"^Answer:\s*(.*)", rest, re.MULTILINE)
+        correct_answer = clean(ans_m.group(1)) if ans_m else ""
 
-Output ONLY a JSON array of these objects, with no surrounding commentary.
+        expl_m = re.search(r"Explanation:\s*([\s\S]*?)(?:\n\s*\n|\Z)", rest)
+        explanation_text = clean(expl_m.group(1)) if expl_m else ""
 
-Text block:
-{block}
-"""
-    with st.spinner("Calling Gemini..."):
-        response = client.models.generate_content(
-            model="gemini-2.0-flash-001",
-            contents=prompt,
+        questions.append(
+            {
+                "question_text": question_text,
+                "option_a": option_a,
+                "option_b": option_b,
+                "option_c": option_c,
+                "option_d": option_d,
+                "correct_answer": correct_answer,
+                "explanation_text": explanation_text,
+                "difficulty": "easy",
+                "created_at": "",
+            }
         )
-    json_output = response.text
+    return questions
 
-    st.subheader("Generated JSON")
-    st.code(json_output, language="json")
+
+# ── Streamlit UI --------------------------------------------------------------
+st.title("TXT → JSON converter for ReadyRN-style questions")
+
+uploaded = st.file_uploader("Upload your .txt file", type=["txt"])
+if uploaded:
+    raw_text = uploaded.read().decode("utf-8", errors="ignore")
+    data = parse_questions(raw_text)
+
+    st.success(f"Parsed **{len(data)}** questions.")
+    if st.checkbox("Show first item"):
+        st.json(data[0] if data else {})
+
+    # prepare JSON for download
+    json_bytes = io.BytesIO()
+    json_bytes.write(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
+    json_bytes.seek(0)
 
     st.download_button(
-        "Download JSON",
-        data=json_output,
+        label="📥 Download JSON",
+        data=json_bytes,
         file_name="questions.json",
-        mime="application/json"
+        mime="application/json",
     )
+else:
+    st.info("➡️  Upload a ReadyRN questions text file to begin.")
